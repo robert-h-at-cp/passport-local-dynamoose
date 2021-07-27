@@ -1,52 +1,59 @@
-# Passport-Local Mongoose
+# Passport-Local Dynamoose
 
-Passport-Local Mongoose is a [Mongoose](http://mongoosejs.com/) [plugin](http://mongoosejs.com/docs/plugins.html)
-that simplifies building username and password login with [Passport](http://passportjs.org).
-
-[![Node.js CI](https://github.com/saintedlama/passport-local-mongoose/actions/workflows/ci.yml/badge.svg)](https://github.com/saintedlama/passport-local-mongoose/actions/workflows/ci.yml)
-[![Coverage Status](https://coveralls.io/repos/saintedlama/passport-local-mongoose/badge.png?branch=master)](https://coveralls.io/r/saintedlama/passport-local-mongoose?branch=master)
-
-## Tutorials
-
-Michael Herman gives a comprehensible walk through for setting up mongoose,
-passport, passport-local and passport-local-mongoose for user authentication in his blog post [User Authentication With Passport.js](http://mherman.org/blog/2013/11/11/user-authentication-with-passport-dot-js/)
+Passport-Local Dynamoose is a wrapper for [Dynamoose](https://dynamoosejs.com) inspired by [Passport-Local Mongoose](https://github.com/saintedlama/passport-local-mongoose) that simplifies building email and password login with [Passport](http://passportjs.org).
 
 ## Installation
 
 ```bash
-> npm install passport-local-mongoose
+> npm install https://github.com/robert-h-at-cp/passport-local-dynamoose
 ```
 
-Passport-Local Mongoose does not require `passport` or `mongoose` dependencies directly but expects you
-to have these dependencies installed.
-
-In case you need to install the whole set of dependencies
-
-```bash
-> npm install passport mongoose passport-local-mongoose
-```
+Passport-Local Dynamoose does not require `passport` or `dynamoose` dependencies directly but expects you to have these dependencies installed.
 
 ## Usage
 
-### Plugin Passport-Local Mongoose
+### Plugin Passport-Local Dynamoose
 
 First you need to plugin Passport-Local Mongoose into your User schema
 
 ```javascript
-const mongoose = require('mongoose');
-const Schema = mongoose.Schema;
-const passportLocalMongoose = require('passport-local-mongoose');
+const dynamoose = require("dynamoose");
+const { v4: uuidv4 } = require('uuid');
+var passportLocalDynamoose = require('passport-local-dynamoose');
 
-const User = new Schema({});
+const UserSchema = new dynamoose.Schema({
+  id: String,
+  email: {
+    type: String,
+    index: [{ global: true, name: 'user-email-index' }],
+  },
+  encryptedPassword: String,
+}, {
+  timestamps: true,
+});
 
-User.plugin(passportLocalMongoose);
+const User = dynamoose.model("User", UserSchema);
+// passport-local-dynamoose expects this document method to be defined so that it can invoke the method before saving the user
+User.methods.document.set('generateIdIfMissing', function(cb) {
+  const promise = Promise.resolve()
+    .then(() => this.id = this.id || uuidv4())
+    .then(() => this);
 
-module.exports = mongoose.model('User', User);
+  if (!cb) {
+    return promise;
+  }
+
+  promise.then(result => cb(null, result)).catch(err => cb(err));
+});
+
+passportLocalDynamoose(User);
+
+module.exports = User;
 ```
 
-You're free to define your User how you like. Passport-Local Mongoose will add a username, hash and salt field to store the username, the hashed password and the salt value.
+You're free to define your User how you like. However Passport-Local Dynamoose do expect the fields to be defined in the example above, including `id`, `email`, `encryptedPassword`, as well as the global secondary index for the email field.
 
-Additionally Passport-Local Mongoose adds some methods to your Schema. See the [API Documentation](https://github.com/saintedlama/passport-local-mongoose#api-documentation) section for more details.
+Additionally Passport-Local Dynamoose adds some methods to your Model and Document. See the [API Documentation](#api-documentation) section for more details.
 
 ### Configure Passport/Passport-Local
 
@@ -61,98 +68,23 @@ To setup Passport-Local Mongoose use this code
 const User = require('./models/user');
 
 // use static authenticate method of model in LocalStrategy
-passport.use(new LocalStrategy(User.authenticate()));
+passport.use(new LocalStrategy({
+  usernameField: 'email',
+  passwordField: 'password'
+}, function(email, password, done) {
+  return User.authenticate().then((fn) => fn(email, password, done));
+}));
 
 // use static serialize and deserialize of model for passport session support
-passport.serializeUser(User.serializeUser());
-passport.deserializeUser(User.deserializeUser());
+passport.serializeUser(function(user, done) {
+  return User.serializeUser().then((fn) => fn(user, done));
+});
+passport.deserializeUser(function(id, done) {
+  return User.deserializeUser().then((fn) => fn(id, done));
+});
 ```
 
-Make sure that you have a mongoose connected to mongodb and you're done.
-
-#### Simplified Passport/Passport-Local Configuration
-
-Starting with version 0.2.1 passport-local-mongoose adds a helper method `createStrategy` as static method to your schema.
-The `createStrategy` is responsible to setup passport-local `LocalStrategy` with the correct options.
-
-```javascript
-const User = require('./models/user');
-
-// CHANGE: USE "createStrategy" INSTEAD OF "authenticate"
-passport.use(User.createStrategy());
-
-passport.serializeUser(User.serializeUser());
-passport.deserializeUser(User.deserializeUser());
-```
-
-The reason for this functionality is that when using the `usernameField` option to specify an alternative usernameField name, for example "email" passport-local would still expect your frontend login form to contain an input field with name "username" instead of email. This can be configured for passport-local but this is double the work. So we got this shortcut implemented.
-
-### Async/Await
-
-Starting with version `5.0.0` passport-local-mongoose is async/await enabled by returning
-Promises for all instance and static methods except `serializeUser` and `deserializeUser`.
-
-```js
-const user = new DefaultUser({username: 'user'});
-await user.setPassword('password');
-await user.save();
-const { user } = await DefaultUser.authenticate()('user', 'password');
-```
-
-### Options
-
-When plugging in Passport-Local Mongoose plugin additional options can be provided to configure
-the hashing algorithm.
-
-```javascript
-User.plugin(passportLocalMongoose, options);
-```
-
-#### Main Options
-
-* `saltlen`: specifies the salt length in bytes. Default: 32
-* `iterations`: specifies the number of iterations used in pbkdf2 hashing algorithm. Default: 25000
-* `keylen`: specifies the length in byte of the generated key. Default: 512
-* `digestAlgorithm`: specifies the pbkdf2 digest algorithm. Default: sha256. (get a list of supported algorithms with crypto.getHashes())
-* `interval`: specifies the interval in milliseconds between login attempts, which increases exponentially based on the number of failed attempts, up to maxInterval. Default: 100
-* `maxInterval`: specifies the maximum amount of time an account can be locked. Default 30000 (5 minutes)
-* `usernameField`: specifies the field name that holds the username. Defaults to 'username'. This option can be used if you want to use a different field to hold the username for example "email".
-* `usernameUnique`: specifies if the username field should be enforced to be unique by a mongodb index or not. Defaults to true.
-* `saltField`: specifies the field name that holds the salt value. Defaults to 'salt'.
-* `hashField`: specifies the field name that holds the password hash value. Defaults to 'hash'.
-* `attemptsField`: specifies the field name that holds the number of login failures since the last successful login. Defaults to 'attempts'.
-* `lastLoginField`: specifies the field name that holds the timestamp of the last login attempt. Defaults to 'last'.
-* `selectFields`: specifies the fields of the model to be selected from mongodb (and stored in the session). Defaults to 'undefined' so that all fields of the model are selected.
-* `usernameCaseInsensitive`: specifies the usernames to be case insensitive. Defaults to 'false'.
-* `usernameLowerCase`: convert username field value to lower case when saving an querying. Defaults to 'false'.
-* `populateFields`: specifies fields to populate in findByUsername function. Defaults to 'undefined'.
-* `encoding`: specifies the encoding the generated salt and hash will be stored in. Defaults to 'hex'.
-* `limitAttempts`: specifies whether login attempts should be limited and login failures should be penalized. Default: false.
-* `maxAttempts`: specifies the maximum number of failed attempts allowed before preventing login. Default: Infinity.
-* `passwordValidator`: specifies your custom validation function for the password in the form:
-    ```js
-    passwordValidator = function(password,cb) {
-      if (someValidationErrorExists(password)) {
-        return cb('this is my custom validation error message')
-      }
-      // return an empty cb() on success
-      return cb()
-    }
-    ```
-    Default: validates non-empty passwords.
-* `passwordValidatorAsync`: specifies your custom validation function for the password with promises in the form:
-    ```js
-    passwordValidatorAsync = function(password) {
-      return someAsyncValidation(password)
-        .catch(function(err){
-          return Promise.reject(err)
-        })
-    }
-    ```
-* `usernameQueryFields`: specifies alternative fields of the model for identifying a user (e.g. email).
-* `findByUsername`: Specifies a query function that is executed with query parameters to restrict the query with extra query parameters. For example query only users with field "active" set to `true`. Default: `function(model, queryParameters) { return model.findOne(queryParameters); }`. See the examples section for a use case.
-
-**_Attention!_** Changing any of the hashing options (saltlen, iterations or keylen) in a production environment will prevent that existing users to authenticate!
+Make sure that you have a dynamoose connected to dynamodb and you're done.
 
 #### Error Messages
 
@@ -169,15 +101,10 @@ Override default error messages by setting `options.errorMessages`.
 
 ### Hash Algorithm
 
-Passport-Local Mongoose use the pbkdf2 algorithm of the node crypto library.
+Passport-Local Dynamoose use the pbkdf2 algorithm of the node crypto library.
 [Pbkdf2](http://en.wikipedia.org/wiki/PBKDF2) was chosen because platform independent
 (in contrary to bcrypt). For every user a generated salt value is saved to make
 rainbow table attacks even harder.
-
-### Examples
-
-For a complete example implementing a registration, login and logout see the
-[login example](https://github.com/saintedlama/passport-local-mongoose/tree/master/examples/login).
 
 ## API Documentation
 
@@ -194,10 +121,6 @@ Changes a user's password hash and salt, resets the user's number of failed pass
 #### authenticate(password, [cb])
 
 Authenticates a user object. If no callback `cb` is provided a `Promise` is returned.
-
-#### resetAttempts([cb])
-
-Resets a user's number of failed password attempts and saves the user object. If no callback `cb` is provided a `Promise` is returned. This method is only defined if `options.limitAttempts` is `true`.
 
 ### Callback Arguments
 
@@ -224,73 +147,6 @@ To commit the changed document, remember to use Mongoose's `document.save()` aft
 
 All those errors inherit from `AuthenticationError`, if you need a more general error class for checking.
 
-### Static methods
-
-Static methods are exposed on the model constructor. For example to use createStrategy function use
-
-```javascript
-const User = require('./models/user');
-User.createStrategy();
-```
-
-* `authenticate()` Generates a function that is used in Passport's LocalStrategy
-* `serializeUser()` Generates a function that is used by Passport to serialize users into the session
-* `deserializeUser()` Generates a function that is used by Passport to deserialize users into the session
-* `register(user, password, cb) Convenience method to register a new user instance with a given password. Checks if username is unique. See [login example](https://github.com/saintedlama/passport-local-mongoose/tree/master/examples/login).
-* `findByUsername()` Convenience method to find a user instance by it's unique username.
-* `createStrategy()` Creates a configured passport-local `LocalStrategy` instance that can be used in passport.
-
-## Examples
-
-### Allow only "active" users to authenticate
-
-First we define a schema with an additional field `active` of type Boolean.
-
-```javascript
-const UserSchema = new Schema({
-  active: Boolean
-});
-```
-
-When plugging in Passport-Local Mongoose we set `usernameUnique` to avoid creating a unique mongodb index on field `username`. To avoid
-non active users to be queried by mongodb we can specify the option `findByUsername` that allows us to restrict a query. In our case
-we want to restrict the query to only query users with field `active` set to `true`. The `findByUsername` MUST return a Mongoose query.
-
-```javascript
-UserSchema.plugin(passportLocalMongoose, {
-  // Set usernameUnique to false to avoid a mongodb index on the username column!
-  usernameUnique: false,
-
-  findByUsername: function(model, queryParameters) {
-    // Add additional query parameter - AND condition - active: true
-    queryParameters.active = true;
-    return model.findOne(queryParameters);
-  }
-});
-```
-
-To test the implementation we can simply create (register) a user with field `active` set to `false` and try to authenticate this user
-in a second step:
-
-```javascript
-const User = mongoose.model('Users', UserSchema);
-
-User.register({username:'username', active: false}, 'password', function(err, user) {
-  if (err) { ... }
-
-  const authenticate = User.authenticate();
-  authenticate('username', 'password', function(err, result) {
-    if (err) { ... }
-
-    // Value 'result' is set to false. The user could not be authenticated since the user is not active
-  });
-});
-```
-
-## Updating from 1.x to 2.x
-
-The default digest algorithm was changed due to security implications from **sha1** to **sha256**. If you decide to upgrade a production system from 1.x to 2.x your users **will not be able to login** since the digest algorithm was changed! In these cases plan some migration strategy and/or use the **sha1** option for the digest algorithm.
-
 ## License
 
-Passport-Local Mongoose is licenses under the [MIT license](http://opensource.org/licenses/MIT).
+Passport-Local Dynamoose is licenses under the [MIT license](http://opensource.org/licenses/MIT).
