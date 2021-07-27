@@ -5,7 +5,7 @@ const pbkdf2 = require('./lib/pbkdf2');
 const errors = require('./lib/errors');
 const authenticate = require('./lib/authenticate');
 
-module.exports = function(schema, options) {
+module.exports = function(model, options) {
   options = options || {};
   options.saltlen = options.saltlen || 32;
   options.iterations = options.iterations || 25000;
@@ -27,25 +27,22 @@ module.exports = function(schema, options) {
   options.passwordValidatorAsync = options.passwordValidatorAsync || defaultPasswordValidatorAsync;
 
   // Populate field names with defaults if not set
-  options.usernameField = options.usernameField || 'username';
-  options.usernameUnique = options.usernameUnique === undefined ? true : options.usernameUnique;
+  options.emailField = options.emailField || 'email';
+  options.emailUnique = options.emailUnique === undefined ? true : options.emailUnique;
 
-  // Populate username query fields with defaults if not set,
-  // otherwise add username field to query fields.
-  if (options.usernameQueryFields) {
-    options.usernameQueryFields.push(options.usernameField);
+  // Populate email query fields with defaults if not set,
+  // otherwise add email field to query fields.
+  if (options.emailQueryFields) {
+    options.emailQueryFields.push(options.emailField);
   } else {
-    options.usernameQueryFields = [options.usernameField];
+    options.emailQueryFields = [options.emailField];
   }
 
-  // option to find username case insensitively
-  options.usernameCaseInsensitive = Boolean(options.usernameCaseInsensitive || false);
+  // option to find email case insensitively
+  options.emailCaseInsensitive = Boolean(options.emailCaseInsensitive || false);
 
-  // option to convert username to lowercase when finding
-  options.usernameLowerCase = options.usernameLowerCase || false;
-
-  options.hashField = options.hashField || 'hash';
-  options.saltField = options.saltField || 'salt';
+  // option to convert email to lowercase when finding
+  options.emailLowerCase = options.emailLowerCase || false;
 
   if (options.limitAttempts) {
     options.lastLoginField = options.lastLoginField || 'last';
@@ -55,12 +52,6 @@ module.exports = function(schema, options) {
     options.maxAttempts = options.maxAttempts || Infinity;
   }
 
-  options.findByUsername =
-    options.findByUsername ||
-    function(model, queryParameters) {
-      return model.findOne(queryParameters);
-    };
-
   options.errorMessages = options.errorMessages || {};
   options.errorMessages.MissingPasswordError = options.errorMessages.MissingPasswordError || 'No password was given';
   options.errorMessages.AttemptTooSoonError = options.errorMessages.AttemptTooSoonError || 'Account is currently locked. Try again later';
@@ -68,35 +59,13 @@ module.exports = function(schema, options) {
     options.errorMessages.TooManyAttemptsError || 'Account locked due to too many failed login attempts';
   options.errorMessages.NoSaltValueStoredError =
     options.errorMessages.NoSaltValueStoredError || 'Authentication not possible. No salt value stored';
-  options.errorMessages.IncorrectPasswordError = options.errorMessages.IncorrectPasswordError || 'Password or username is incorrect';
-  options.errorMessages.IncorrectUsernameError = options.errorMessages.IncorrectUsernameError || 'Password or username is incorrect';
-  options.errorMessages.MissingUsernameError = options.errorMessages.MissingUsernameError || 'No username was given';
-  options.errorMessages.UserExistsError = options.errorMessages.UserExistsError || 'A user with the given username is already registered';
+  options.errorMessages.IncorrectPasswordError = options.errorMessages.IncorrectPasswordError || 'Password or email is incorrect';
+  options.errorMessages.IncorrectEmailError = options.errorMessages.IncorrectEmailError || 'Password or email is incorrect';
+  options.errorMessages.MissingEmailError = options.errorMessages.MissingEmailError || 'No email was given';
+  options.errorMessages.UserExistsError = options.errorMessages.UserExistsError || 'A user with the given email is already registered';
 
-  const schemaFields = {};
-
-  if (!schema.path(options.usernameField)) {
-    schemaFields[options.usernameField] = { type: String, unique: options.usernameUnique };
-  }
-  schemaFields[options.hashField] = { type: String, select: false };
-  schemaFields[options.saltField] = { type: String, select: false };
-
-  if (options.limitAttempts) {
-    schemaFields[options.attemptsField] = { type: Number, default: 0 };
-    schemaFields[options.lastLoginField] = { type: Date, default: Date.now };
-  }
-
-  schema.add(schemaFields);
-
-  schema.pre('save', function(next) {
-    if (options.usernameLowerCase && this[options.usernameField]) {
-      this[options.usernameField] = this[options.usernameField].toLowerCase();
-    }
-
-    next();
-  });
-
-  schema.methods.setPassword = function(password, cb) {
+  model.methods.document.set('setPassword', function(password, cb) {
+    let _salt = null;
     const promise = Promise.resolve()
       .then(() => {
         if (!password) {
@@ -107,13 +76,13 @@ module.exports = function(schema, options) {
       .then(() => randomBytes(options.saltlen))
       .then(saltBuffer => saltBuffer.toString(options.encoding))
       .then(salt => {
-        this.set(options.saltField, salt);
+        _salt = salt;
 
         return salt;
       })
       .then(salt => pbkdf2Promisified(password, salt, options))
       .then(hashRaw => {
-        this.set(options.hashField, Buffer.from(hashRaw, 'binary').toString(options.encoding));
+        this.encryptedPassword = `${_salt}.${Buffer.from(hashRaw, 'binary').toString(options.encoding)}`;
       })
       .then(() => this);
 
@@ -122,9 +91,9 @@ module.exports = function(schema, options) {
     }
 
     promise.then(result => cb(null, result)).catch(err => cb(err));
-  };
+  });
 
-  schema.methods.changePassword = function(oldPassword, newPassword, cb) {
+  model.methods.document.set('changePassword', function(oldPassword, newPassword, cb) {
     const promise = Promise.resolve()
       .then(() => {
         if (!oldPassword || !newPassword) {
@@ -146,56 +115,31 @@ module.exports = function(schema, options) {
     }
 
     promise.then(result => cb(null, result)).catch(err => cb(err));
-  };
+  });
 
-  schema.methods.authenticate = function(password, cb) {
+  model.methods.document.set('authenticate', function(password, cb) {
     const promise = Promise.resolve().then(() => {
-      if (this.get(options.saltField)) {
-        return authenticate(this, password, options);
-      }
-
-      return this.constructor.findByUsername(this.get(options.usernameField), true).then(user => {
-        if (user) {
-          return authenticate(user, password, options);
-        }
-
-        return { user: false, error: new errors.IncorrectUsernameError(options.errorMessages.IncorrectUsernameError) };
-      });
+      return authenticate(this, password, options);
     });
 
     if (!cb) {
       return promise;
     }
 
-    promise.then(({ user, error }) => cb(null, user, error)).catch(err => cb(err));
-  };
-
-  if (options.limitAttempts) {
-    schema.methods.resetAttempts = function(cb) {
-      const promise = Promise.resolve().then(() => {
-        this.set(options.attemptsField, 0);
-        return this.save();
-      });
-
-      if (!cb) {
-        return promise;
-      }
-
-      promise.then(result => cb(null, result)).catch(err => cb(err));
-    };
-  }
+    promise.then(({ user, error }) => cb(null, { user, error })).catch(err => cb(err));
+  });
 
   // Passport Local Interface
-  schema.statics.authenticate = function() {
-    return (username, password, cb) => {
+  model.methods.set('authenticate', async function() {
+    return (email, password, cb) => {
       const promise = Promise.resolve()
-        .then(() => this.findByUsername(username, true))
+        .then(() => this.findByEmail(email))
         .then(user => {
           if (user) {
             return user.authenticate(password);
           }
 
-          return { user: false, error: new errors.IncorrectUsernameError(options.errorMessages.IncorrectUsernameError) };
+          return { user: false, error: new errors.IncorrectEmailError(options.errorMessages.IncorrectEmailError) };
         });
 
       if (!cb) {
@@ -204,40 +148,41 @@ module.exports = function(schema, options) {
 
       promise.then(({ user, error }) => cb(null, user, error)).catch(err => cb(err));
     };
-  };
+  });
 
   // Passport Interface
-  schema.statics.serializeUser = function() {
+  model.methods.set('serializeUser', async function() {
     return function(user, cb) {
-      cb(null, user.get(options.usernameField));
+      cb(null, user.id);
     };
-  };
+  });
 
-  schema.statics.deserializeUser = function() {
-    return (username, cb) => {
-      this.findByUsername(username, cb);
+  model.methods.set('deserializeUser', async function() {
+    return (id, cb) => {
+      this.findById(id, cb);
     };
-  };
+  });
 
-  schema.statics.register = function(user, password, cb) {
+  model.methods.set('register', function(user, password, cb) {
     // Create an instance of this in case user isn't already an instance
-    if (!(user instanceof this)) {
-      user = new this(user);
+    if (!(user instanceof model)) {
+      user = new model(user);
     }
 
     const promise = Promise.resolve()
       .then(() => {
-        if (!user.get(options.usernameField)) {
-          throw new errors.MissingUsernameError(options.errorMessages.MissingUsernameError);
+        if (!user[options.emailField]) {
+          throw new errors.MissingEmailError(options.errorMessages.MissingEmailError);
         }
       })
-      .then(() => this.findByUsername(user.get(options.usernameField)))
+      .then(() => this.findByEmail(user[options.emailField]))
       .then(existingUser => {
         if (existingUser) {
           throw new errors.UserExistsError(options.errorMessages.UserExistsError);
         }
       })
       .then(() => user.setPassword(password))
+      .then(() => user.generateIdIfMissing())
       .then(() => user.save());
 
     if (!cb) {
@@ -245,61 +190,45 @@ module.exports = function(schema, options) {
     }
 
     promise.then(result => cb(null, result)).catch(err => cb(err));
-  };
+  });
 
-  schema.statics.findByUsername = function(username, opts, cb) {
+  model.methods.set('findByEmail', function(email, cb) {
+    // if specified, convert the email to lowercase
+    if (email !== undefined && options.emailLowerCase) {
+      email = email.toLowerCase();
+    }
+
+    model.query('email').eq(email).using('user-email-index').limit(1).exec().then(function(result) {
+      result = result.count >= 1 ? result[0] : null;
+
+      if (cb) {
+        cb(null, result);
+        return;
+      }
+
+      return result;
+    });
+  });
+
+  model.methods.set('findById', function(id, opts, cb) {
     if (typeof opts === 'function') {
       cb = opts;
       opts = {};
     }
 
-    if (typeof opts == 'boolean') {
-      opts = {
-        selectHashSaltFields: opts
-      };
-    }
-
     opts = opts || {};
-    opts.selectHashSaltFields = !!opts.selectHashSaltFields;
-
-    // if specified, convert the username to lowercase
-    if (username !== undefined && options.usernameLowerCase) {
-      username = username.toLowerCase();
-    }
-
-    // Add each username query field
-    const queryOrParameters = [];
-    for (let i = 0; i < options.usernameQueryFields.length; i++) {
-      const parameter = {};
-      parameter[options.usernameQueryFields[i]] = options.usernameCaseInsensitive ? new RegExp(`^${username}$`, 'i') : username;
-      queryOrParameters.push(parameter);
-    }
-
-    const query = options.findByUsername(this, { $or: queryOrParameters });
-
-    if (opts.selectHashSaltFields) {
-      query.select('+' + options.hashField + ' +' + options.saltField);
-    }
-
-    if (options.selectFields) {
-      query.select(options.selectFields);
-    }
-
-    if (options.populateFields) {
-      query.populate(options.populateFields);
-    }
 
     if (cb) {
-      query.exec(cb);
+      model.get(id, cb);
       return;
     }
 
-    return query;
-  };
+    return model.get(id);
+  });
 
-  schema.statics.createStrategy = function() {
+  model.methods.set('createStrategy', function() {
     return new LocalStrategy(options, this.authenticate());
-  };
+  });
 };
 
 function pbkdf2Promisified(password, salt, options) {

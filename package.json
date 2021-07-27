@@ -1,5 +1,5 @@
 {
-  "name": "passport-local-mongoose",
+  "name": "passport-local-dynamoose",
   "description": "Mongoose plugin that simplifies building username and password login with Passport",
   "version": "6.1.0",
   "main": "index.js",
@@ -23,13 +23,11 @@
   "devDependencies": {
     "chai": "^4.3.4",
     "debug": "^4.3.2",
-    "drop-mongodb-collections": "^1.2.6",
     "eslint": "^7.29.0",
     "eslint-config-prettier": "^8.3.0",
     "eslint-plugin-prettier": "^3.4.0",
     "mocha": "^9.0.1",
     "mocha-lcov-reporter": "^1.3.0",
-    "mongoose": "^5.12.14",
     "nyc": "^15.1.0",
     "prettier": "^2.3.1",
     "standard-version": "^9.3.0"
