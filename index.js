@@ -52,6 +52,8 @@ module.exports = function(model, options) {
     options.maxAttempts = options.maxAttempts || Infinity;
   }
 
+  options.confirmable = options.confirmable || false;
+
   options.errorMessages = options.errorMessages || {};
   options.errorMessages.MissingPasswordError = options.errorMessages.MissingPasswordError || 'No password was given';
   options.errorMessages.AttemptTooSoonError = options.errorMessages.AttemptTooSoonError || 'Account is currently locked. Try again later';
@@ -63,6 +65,7 @@ module.exports = function(model, options) {
   options.errorMessages.IncorrectEmailError = options.errorMessages.IncorrectEmailError || 'Password or email is incorrect';
   options.errorMessages.MissingEmailError = options.errorMessages.MissingEmailError || 'No email was given';
   options.errorMessages.UserExistsError = options.errorMessages.UserExistsError || 'A user with the given email is already registered';
+  options.errorMessages.PendingVerificationError = options.errorMessages.PendingVerificationError || 'You have to verify your email before continuing';
 
   model.methods.document.set('setPassword', function(password, cb) {
     let _salt = null;
@@ -159,7 +162,11 @@ module.exports = function(model, options) {
 
   model.methods.set('deserializeUser', async function() {
     return (id, cb) => {
-      this.findById(id, cb);
+      this.findById(id, (err, user) => {
+        if (err) { return cb(err, false); }
+        if (options.confirmable && !user.confirmedAt) { return cb(new errors.PendingVerificationError(options.errorMessages.PendingVerificationError), false); }
+        return cb(null, user);
+      });
     };
   });
 
